@@ -1,18 +1,16 @@
 import pandas as pd
 import numpy as np
+import json
 from typing import Dict, Any, Optional, List
 
-def print_tree(self, tree: Optional[Dict[str, Any]] = None, indent: str = "") -> None:
-        """Recursively prints the decision tree in a readable format"""
-        if tree is None:
-            tree = self.tree
+def print_tree(tree: Optional[Dict[str, Any]] = None, indent: str = "") -> None:
 
         if isinstance(tree, dict):
             for feature, branches in tree.items():
                 print(f"{indent}{feature}")
                 for value, subtree in branches.items():
                     print(f"{indent}  --> {value}:")
-                    self.print_tree(subtree, indent + "    ")
+                    print_tree(subtree, indent + "    ")
         else:
             print(f"{indent}--> Class: {tree}")
             
@@ -100,10 +98,10 @@ class ID3DecisionTree:
         return tree
 
     def train_model(self, data: pd.DataFrame, label: str) -> Dict[str, Any]:
-        self.label = label  # Store label name for clarity
+        self.label = label  
         processed_data = self.convert_numeric_to_categorical(data)
         self.tree = self.build_tree(processed_data)
-        return self.tree
+
 
     def predict_sample(self, tree: Dict[str, Any], sample: pd.Series) -> Any:
         while isinstance(tree, dict):
@@ -114,20 +112,33 @@ class ID3DecisionTree:
     def predict(self, data: pd.DataFrame) -> pd.Series:
         return pd.Series([self.predict_sample(self.tree, row) for _, row in data.iterrows()])
     
-    def load_model(self):
-        pass
-    def save_model(self):
-        pass
+    def save_model(self, file_path: str) -> None:
+            if self.tree is None:
+                raise ValueError("Model is not trained yet, cannot save.")
+            
+            with open(file_path, 'w') as f:
+                json.dump(self.tree, f, indent=4)
 
+    def load_model(self, file_path: str) -> None:
+        with open(file_path, 'r') as f:
+            self.tree = json.load(f)
 
-# Test the model with a label
-if __name__ == "__main__":
-    df = pd.DataFrame({
-        'Temperature': [85, 80, 83, 70, 68, 65, 72, 75, 77, 81, 71, 73, 78, 69],
-        'Humidity': [85, 90, 78, 96, 80, 70, 65, 95, 60, 65, 75, 80, 70, 80],
-        'Windy': ['False', 'True', 'False', 'False', 'False', 'True', 'True', 'False', 'False', 'False', 'True', 'True', 'False', 'True'],
-        'Play': ['No', 'No', 'Yes', 'Yes', 'Yes', 'No', 'Yes', 'No', 'Yes', 'Yes', 'Yes', 'Yes', 'Yes', 'No']
-    })
+# if __name__ == "__main__":
+#     df = pd.DataFrame({
+#         'Temperature': [85, 80, 83, 70, 68, 65, 72, 75, 77, 81, 71, 73, 78, 69],
+#         'Humidity': [85, 90, 78, 96, 80, 70, 65, 95, 60, 65, 75, 80, 70, 80],
+#         'Windy': ['False', 'True', 'False', 'False', 'False', 'True', 'True', 'False', 'False', 'False', 'True', 'True', 'False', 'True'],
+#         'Play': ['No', 'No', 'Yes', 'Yes', 'Yes', 'No', 'Yes', 'No', 'Yes', 'Yes', 'Yes', 'Yes', 'Yes', 'No']
+#     })
 
-    tree_model = ID3DecisionTree()
-    tree = tree_model.train_model(df, label='Play')
+#     tree_model = ID3DecisionTree()
+#     tree_model.train_model(df, label='Play')
+#     print(f"Trained Tree:\n")
+#     print_tree(tree_model.tree)
+
+#     tree_model.save_model("decision_tree.json")
+
+#     new_tree_model = ID3DecisionTree()
+#     new_tree_model.load_model("decision_tree.json")
+#     print(f"\nLoaded Tree:\n")
+#     print_tree(new_tree_model.tree)
