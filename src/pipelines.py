@@ -4,6 +4,7 @@ import numpy as np
 from sklearn.impute import SimpleImputer
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
+from sklearn.utils import shuffle
 from sklearn.preprocessing import PolynomialFeatures, RobustScaler
 
 # Set up logging
@@ -185,6 +186,9 @@ def handleClassImbalance(df, target_column="attack_cat", random_state=42):
         raise
 
     logger.info("Class imbalance handled successfully.")
+    
+    balanced_df = shuffle(balanced_df, random_state=random_state)
+    
     return balanced_df
 
 

@@ -2,38 +2,62 @@ from sklearn.model_selection import train_test_split
 import pandas as pd
 from pipelines import create_preprocessing_pipeline, handleMissingValue
 
-df = pd.read_csv("data/merged_train_data.csv")
-df = df.rename(columns={"attack_cat ": "attack_cat"})
+def main(data_path, train_output_path, validation_output_path):
 
-metadata = pd.read_csv("data/metadata.csv")
-metadata = metadata.rename(columns={"Type ": "Type"})
+    df = pd.read_csv(data_path)
+    df = df.rename(columns={"attack_cat ": "attack_cat"})
 
-metadata["Type"] = metadata["Type"].str.lower()
-metadata[["Name", "Type"]]
+    metadata = pd.read_csv("data/metadata.csv")
+    metadata = metadata.rename(columns={"Type ": "Type"})
 
-# Drop column with name = label in metadata
-if "label" in metadata["Name"].values:
-    metadata = metadata[metadata["Name"] != "label"]
+    metadata["Type"] = metadata["Type"].str.lower()
+    metadata[["Name", "Type"]]
 
-numeric_columns = metadata.loc[
-    (metadata["Type"] == "float") | (metadata["Type"] == "integer")
-]["Name"]
-categorical_columns = metadata.loc[
-    (metadata["Type"] != "float") & (metadata["Type"] != "integer")
-]["Name"]
+    # Drop column with name = label in metadata
+    if "label" in metadata["Name"].values:
+        metadata = metadata[metadata["Name"] != "label"]
 
-
-df = df.drop(columns=["label"])
-train_set, val_set = train_test_split(
-    df, test_size=0.33, random_state=42, stratify=df["attack_cat"]
-)
+    numeric_columns = metadata.loc[
+        (metadata["Type"] == "float") | (metadata["Type"] == "integer")
+    ]["Name"]
+    categorical_columns = metadata.loc[
+        (metadata["Type"] != "float") & (metadata["Type"] != "integer")
+    ]["Name"]
 
 
-preprocessing_pipeline = create_preprocessing_pipeline(
-    train_set, numeric_columns, categorical_columns
-)
+    df = df.drop(columns=["label"])
+    
+    preprocessing_pipeline = create_preprocessing_pipeline(
+        df, numeric_columns, categorical_columns
+    )
+    
+    # train_set, val_set = train_test_split(
+    # df, test_size=0.33, random_state=42, stratify=df["attack_cat"]
+    # )
+    # preprocessing_pipeline = create_preprocessing_pipeline(
+    #     train_set, numeric_columns, categorical_columns
+    # )
 
-# Save the preprocessing pipeline as csv
-pd.DataFrame(preprocessing_pipeline).to_csv(
-    "data/preprocessing_pipeline.csv", index=False
-)
+    # Save the preprocessing pipeline as csv
+    split_index = int(len(preprocessing_pipeline) * 0.8)
+    
+    train_set = preprocessing_pipeline.iloc[:split_index]
+    valiadation_set = preprocessing_pipeline.iloc[split_index:]
+    
+    print("Saving preprocessed train set data to csv")
+    pd.DataFrame(train_set).to_csv(
+        train_output_path, index=False
+    )
+    
+    print("Saving preprocessed validation set data to csv")
+    pd.DataFrame(valiadation_set).to_csv(
+        validation_output_path, index=False
+    )
+
+if __name__ == "__main__":
+    
+    data_path = "data/merged_train_data.csv"
+    train_output_path = "data/preprocessed_train_data.csv"
+    validation_output_path = "data/preprocessed_validation_data.csv"
+    
+    main(data_path, train_output_path, validation_output_path)
