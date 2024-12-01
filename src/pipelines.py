@@ -5,7 +5,14 @@ from sklearn.impute import SimpleImputer
 from imblearn.over_sampling import SMOTE
 from imblearn.under_sampling import RandomUnderSampler
 from sklearn.utils import shuffle
-from sklearn.preprocessing import PolynomialFeatures, RobustScaler
+from sklearn.preprocessing import (
+    PolynomialFeatures,
+    RobustScaler,
+    StandardScaler,
+    MinMaxScaler,
+)
+from sklearn.decomposition import PCA
+from sklearn.manifold import TSNE
 
 # Set up logging
 logging.basicConfig(
@@ -116,7 +123,7 @@ def featureScaling(df, numeric_columns=None, categorical_columns=None):
     """
     logger.info("Scaling features...")
     try:
-        columns = df.select_dtypes(include=["int64", "float64"]).columns
+        columns = numeric_columns
         scaler = RobustScaler()
         df[columns] = scaler.fit_transform(df[columns])
     except Exception as e:
@@ -186,10 +193,102 @@ def handleClassImbalance(df, target_column="attack_cat", random_state=42):
         raise
 
     logger.info("Class imbalance handled successfully.")
-    
+
     balanced_df = shuffle(balanced_df, random_state=random_state)
-    
+
     return balanced_df
+
+
+def normalizeData(df, numeric_columns, method="standard", exclude_columns=None):
+    # Create a copy of the dataframe
+    df = df.copy()
+
+    # Identify columns to normalize (numeric columns)
+    if exclude_columns is None:
+        exclude_columns = []
+
+    # Select numeric columns to normalize
+    columns_to_normalize = [
+        col for col in numeric_columns if col not in exclude_columns
+    ]
+
+    # Choose normalization method
+    if method == "standard":
+        scaler = StandardScaler()
+    elif method == "minmax":
+        scaler = MinMaxScaler()
+    elif method == "robust":
+        scaler = RobustScaler()
+    else:
+        raise ValueError(
+            "Invalid normalization method. Choose 'standard', 'minmax', or 'robust'."
+        )
+
+    # Fit and transform the selected columns
+    df[columns_to_normalize] = scaler.fit_transform(df[columns_to_normalize])
+
+    return df, scaler
+
+
+def reduceDimensionality(
+    df, numeric_columns, method="pca", n_components=None, exclude_columns=None
+):
+    # Create a copy of the dataframe
+    df = df.copy()
+
+    # Identify columns to use for dimensionality reduction
+    if exclude_columns is None:
+        exclude_columns = []
+
+    # Select numeric columns for reduction
+    columns_to_reduce = [col for col in numeric_columns if col not in exclude_columns]
+
+    # Prepare data for dimensionality reduction
+    X = df[columns_to_reduce]
+
+    # Determine number of components if not specified
+    if n_components is None:
+        if method == "pca":
+            # Use 95% explained variance as default for PCA
+            n_components = min(len(columns_to_reduce), X.shape[0])
+        else:
+            # Default to 2 for visualization
+            n_components = 2
+
+    # Apply dimensionality reduction method
+    if method == "pca":
+        reducer = PCA(n_components=n_components)
+        X_reduced = reducer.fit_transform(X)
+
+        # Print explained variance ratio for PCA
+        explained_variance = reducer.explained_variance_ratio_
+        cumulative_variance = np.cumsum(explained_variance)
+        print("PCA Explained Variance Ratio:")
+        for i, (var, cum_var) in enumerate(
+            zip(explained_variance, cumulative_variance), 1
+        ):
+            print(f"Component {i}: {var*100:.2f}% (Cumulative: {cum_var*100:.2f}%)")
+
+    elif method == "t-sne":
+        reducer = TSNE(n_components=n_components, random_state=42)
+        X_reduced = reducer.fit_transform(X)
+
+    else:
+        raise ValueError(
+            "Invalid dimensionality reduction method. Choose 'pca' or 't-sne'."
+        )
+
+    # Create a new dataframe with reduced dimensions
+    reduced_df = pd.DataFrame(
+        X_reduced, columns=[f"reduced_dim_{i+1}" for i in range(n_components)]
+    )
+
+    # Preserve excluded columns and target variable
+    for col in df.columns:
+        if col not in columns_to_reduce:
+            reduced_df[col] = df[col]
+
+    return reduced_df, reducer
 
 
 def create_preprocessing_pipeline(
@@ -206,7 +305,9 @@ def create_preprocessing_pipeline(
         df = engineerFeature(df, numeric_columns, categorical_columns)
         df = encodeFeatures(df, categorical_columns)
         df = featureScaling(df, numeric_columns, categorical_columns)
-        df = handleClassImbalance(df, target_column)
+        # df = handleClassImbalance(df, target_column)
+        # df = normalizeData(df, numeric_columns)
+        # df = reduceDimensionality(df, numeric_columns)
     except Exception as e:
         logger.error(f"Error during preprocessing pipeline: {e}")
         raise
