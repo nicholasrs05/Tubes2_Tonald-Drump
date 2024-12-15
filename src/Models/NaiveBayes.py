@@ -1,129 +1,158 @@
 import pandas as pd
 import numpy as np
 import json
-import time
-from pprint import pprint
+from sklearn.base import BaseEstimator, ClassifierMixin
+from sklearn.preprocessing import LabelEncoder
+from google.colab import files
 
-class NumpyEncoder(json.JSONEncoder):
-    def default(self, obj):
-        if isinstance(obj, (np.integer, np.floating, np.bool_)):
-            return obj.item()
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        return super().default(obj)
 
-    def convert_to_np_float64(obj):
+class CustomGaussianNB(BaseEstimator, ClassifierMixin):
 
-        if isinstance(obj, float):
-            return np.float64(obj)
-        elif isinstance(obj, dict):
-            return {k: NumpyEncoder.convert_to_np_float64(v) for k, v in obj.items()}
-        elif isinstance(obj, list):
-            return [NumpyEncoder.convert_to_np_float64(i) for i in obj]
-        else:
-            return obj
-
-class NaiveBayes:
     def __init__(self):
+
+        self.smoothing = 1e-9
+        self.label_encoder = LabelEncoder()
         self.model = {}
-        
-    def trainModel(self, df):
-        start_time = time.time()
-        print(f"{(time.time()-start_time):.2f}s : Start training model with Gaussian Naive Bayes with {len(df)} samples")
-        
-        features_name = df.columns[:-1] 
-        labels = df['attack_cat'].unique()  
+        self.classes = None
+        self.class_priors = None
+        self.fitted = False
 
-        for i, feature in enumerate(features_name):
-            print(f"{(time.time()-start_time):.2f}s : {i}. Training model for feature \"{feature}\"")
-            self.model[feature] = {}
+    def fit(self, X, y):
 
-            for label in labels:
-                label_data = df[df['attack_cat'] == label]
+        # if self.fitted:
+        #     return self
 
-                mean = np.float64(label_data[feature].mean())
-                stdev = np.float64(label_data[feature].std())
-                
-                self.model[feature][label] = {"mean": mean, "stdev": stdev}
+        if isinstance(X, pd.DataFrame):
+            X = X.to_numpy()
+        if isinstance(y, pd.Series):
+            y = y.to_numpy()
 
-        pprint(self.model)
-        
-    def predict(self, df):
-        
-        print(f"Start predicting with Gaussian Naive Bayes with {len(df)} samples")
+        y_encoded = self.label_encoder.fit_transform(y)
+        self.classes = self.label_encoder.classes_
+        class_counts = np.bincount(y_encoded)
+        self.class_priors = np.log(class_counts / len(y_encoded))
 
-        features_name = df.columns[:-1]
-        labels = df['attack_cat'].unique()  
-        
+        self.model = {}
+        for label in np.unique(y_encoded):
+            class_data = X[y_encoded == label]
+            self.model[label] = {}
+
+            for i in range(X.shape[1]):
+                feature_data = class_data[:, i]
+                mean = np.mean(feature_data)
+                std = np.std(feature_data)
+
+                std = max(std, self.smoothing)
+                self.model[int(label)][int(i)] = {'mean': mean, 'std': std}
+
+        self.fitted = True
+        return self
+
+    def predict(self, X):
+
+        if isinstance(X, pd.DataFrame):
+            X = X.to_numpy()
+
         predictions = []
-        
-        for i, row in df.iterrows():
-            print(f"{i}/{len(df)}", end="\r")
-            highest_prob = float('-inf')
-            predicted_label = None
-            
-            for label in labels:
-                prob = 1
-                for feature in features_name:
-                    prob *= self.calcGaussian(
-                        row[feature], 
-                        self.model[feature][label]["mean"], 
-                        self.model[feature][label]["stdev"]
-                    )
-                
-                if prob > highest_prob:
-                    highest_prob = prob
-                    predicted_label = label
-            
-            predictions.append(predicted_label)
-        
-        return pd.Series(predictions, index=df.index, name='predicted_label')
-    
-    def calculateAccuracy(self, df):
-        predicted_labels = self.predict(df)
-        
-        accuracy = (predicted_labels == df['attack_cat']).mean()
-        
-        return accuracy
 
-    def saveModel(self, path):
-        with open(path, 'w') as f:
-            json.dump(self.model, f, cls=NumpyEncoder, indent=4)
-        print(f"Model saved to {path}")
+        for row in X:
+            log_likelihoods = {}
 
-    def loadModel(self, path):
-        with open(path, 'r') as f:
-            loaded_model = json.load(f)
-            self.model = NumpyEncoder.convert_to_np_float64(loaded_model)
-        print(f"Model loaded from {path}")
+            predicted_label_encoded = None
+            max_log_likelihood = float('-inf')
 
-    def calcGaussian(self, data_to_predict, mean, stdev):
-    
-        if stdev == 0:
-            stdev = 1e-10
-        
-        exponent = np.exp(-((data_to_predict - mean) ** 2) / (2 * stdev ** 2))
-        return (1 / (np.sqrt(2 * np.pi) * stdev)) * exponent
 
-    def printModel(self):
-        pprint(self.model)
+            for label in self.model.keys():
+                log_likelihood = self.class_priors[label]
 
-if __name__ == "__main__":
-    nb = NaiveBayes()
+                for i in range(len(row)):
+                    mean = self.model[label][i]['mean']
+                    std = self.model[label][i]['std']
+
+                    coefficient = -np.log(std * np.sqrt(2 * np.pi))
+                    exponent = -0.5 * ((row[i] - mean) / std) ** 2
+
+                    log_likelihood += coefficient + exponent
+
+                if predicted_label_encoded == None or log_likelihood > max_log_likelihood:
+                    max_log_likelihood = log_likelihood
+                    predicted_label_encoded = label
+
+                log_likelihoods[label] = log_likelihood
+
+            predicted_class = self.label_encoder.inverse_transform([predicted_label_encoded])[0]
+            predictions.append(predicted_class)
+
+        return np.array(predictions)
+
+    def save_model(self, model_path, download=False):
+
+        if not self.fitted:
+            raise ValueError("Model is not fitted. Please fit the model before saving.")
+
+        model_data = {
+            'class_priors': self.class_priors.tolist(),
+            'classes': self.classes.tolist(),
+            'model': {},
+        }
+
+        for label in self.model:
+            model_data['model'][str(label)] = {}
+            for i in self.model[label]:
+                model_data['model'][str(label)][str(i)] = {
+                    'mean': str(self.model[label][i]['mean']),
+                    'std': str(self.model[label][i]['std'])
+                }
+
+        with open(model_path, 'w') as f:
+            json.dump(model_data, f, indent=4)
+
+        print(f"\nModel saved to: {model_path}")
+
+        if download:
+            files.download(model_path)
+
+
+    def load_model(self, model_path):
+        with open(model_path, 'r') as f:
+            model_data = json.load(f)
+
+        self.class_priors = np.array(model_data['class_priors'])
+        self.classes = np.array(model_data['classes'])
+        self.model = model_data['model']
+
+        new_model = {}
+        for label_str, features in self.model.items():
+            label = int(label_str)
+            new_model[label] = {}
+            for i_str, feature_data in features.items():
+                i = int(i_str)
+                feature_data['mean'] = float(feature_data['mean'])
+                feature_data['std'] = float(feature_data['std'])
+                new_model[label][i] = feature_data
+
+        self.model = new_model
+        self.label_encoder.classes_ = np.array(np.array(model_data['classes']))
+
+        self.fitted = True
+
+
+# if __name__ == "__main__":
+#     nb = NaiveBayes()
     
-    # # Train model
-    # train_data = pd.read_csv("data/preprocessed_train_data.csv")
-    # nb.trainModel(df=train_data)
-    # nb.saveModel("src/Models/NB_model.json")
+#     # # Train model
+#     # train_data = pd.read_csv("data/preprocessed_train_data.csv")
+#     # nb.trainModel(df=train_data)
+#     # nb.saveModel("src/Models/NB_model.json")
     
-    # Test model
-    validation_data = pd.read_csv("data/preprocessed_validation_data.csv")
-    split_index = int(len(validation_data) * 0.1)
-    validation_data = validation_data.iloc[:split_index]
+#     # Test model
+#     validation_data = pd.read_csv("data/preprocessed_validation_data.csv")
+#     split_index = int(len(validation_data) * 0.1)
+#     validation_data = validation_data.iloc[:split_index]
     
-    nb.loadModel("src/Models/NB_model.json")
-    accuracy = nb.calculateAccuracy(validation_data)
-    print(f"Model Accuracy: {accuracy * 100:.2f}%")
+#     nb.loadModel("src/Models/NB_model.json")
+#     accuracy = nb.calculateAccuracy(validation_data)
+#     print(f"Model Accuracy: {accuracy * 100:.2f}%")
 
 
     

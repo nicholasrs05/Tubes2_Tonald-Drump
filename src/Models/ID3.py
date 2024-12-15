@@ -1,63 +1,62 @@
 import pandas as pd
 import numpy as np
 import json
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional,List
+from sklearn.base import BaseEstimator, ClassifierMixin
 
-def print_tree(tree: Optional[Dict[str, Any]] = None, indent: str = "") -> None:
 
-        if isinstance(tree, dict):
-            for feature, branches in tree.items():
-                print(f"{indent}{feature}")
-                for value, subtree in branches.items():
-                    print(f"{indent}  --> {value}:")
-                    print_tree(subtree, indent + "    ")
-        else:
-            print(f"{indent}--> Class: {tree}")
-            
-class ID3DecisionTree:
+class ID3DecisionTree(BaseEstimator, ClassifierMixin):
     def __init__(self):
         self.tree: Optional[Dict[str, Any]] = None
-        self.label: str = "" 
+        self.label: str = ""
 
     def calculate_entropy(self, data: pd.DataFrame) -> float:
-        label_counts = data.iloc[:, -1].value_counts()
-        probabilities = label_counts / len(data)
-        entropy = -sum(probabilities * np.log2(probabilities + 1e-9))
-        return entropy
+        _, counts = np.unique(data.iloc[:, -1], return_counts=True)
+        probabilities = counts / counts.sum()
+        return -np.sum(probabilities * np.log2(probabilities + 1e-9))
+
 
     def calculate_information_gain(self, data: pd.DataFrame, feature: str) -> float:
         total_entropy = self.calculate_entropy(data)
-        unique_values, counts = np.unique(data[feature], return_counts=True)
-        weighted_entropy = sum(
-            (count / len(data)) * self.calculate_entropy(data[data[feature] == value])
-            for value, count in zip(unique_values, counts)
-        )
+        unique_values = data[feature].unique()
+        weighted_entropy = 0
+
+        for value in unique_values:
+            subset = data[data[feature] == value]
+            weighted_entropy += (len(subset) / len(data)) * self.calculate_entropy(subset)
+
         return total_entropy - weighted_entropy
 
-    def find_best_splits(self, data: pd.DataFrame, feature: str, min_gain: float = 0.01) -> List[float]:
+
+    def find_best_splits(self, data: pd.DataFrame, feature: str, max_splits: int) -> List[float]:
         sorted_data = data.sort_values(feature)
         unique_values = sorted_data[feature].unique()
+
+        print(f"Unique value length of column '{feature}' is {len(unique_values)}")
+
+        if len(unique_values) <= 1:
+            return []
+
+        max_splits = min(max_splits, len(unique_values) - 1)
+
         split_points = []
+        last_split = None
+        for i in range(1, max_splits + 1):
+            quantile = i / (max_splits + 1)
+            split_value = np.quantile(unique_values, quantile)
 
-        def find_split(start: int, end: int):
-            best_split, best_gain = None, 0.0
-            for i in range(start + 1, end):
-                midpoint = (unique_values[i - 1] + unique_values[i]) / 2
-                left, right = sorted_data[sorted_data[feature] <= midpoint], sorted_data[sorted_data[feature] > midpoint]
+            if last_split is None or not np.isclose(split_value, last_split):
+                split_points.append(split_value)
+                last_split = split_value
 
-                if len(left) > 0 and len(right) > 0:
-                    gain = self.calculate_information_gain_on_split(data, left, right)
-                    if gain > best_gain:
-                        best_gain, best_split = gain, midpoint
+        split_points = sorted(set(split_points))
 
-            if best_split and best_gain >= min_gain:
-                split_points.append(best_split)
-                idx = np.searchsorted(unique_values, best_split)
-                find_split(start, idx)
-                find_split(idx, end)
+        if len(split_points) < 1:
+            return []
 
-        find_split(0, len(unique_values))
-        return sorted(split_points)
+        return split_points
+
+
 
     def calculate_information_gain_on_split(self, data: pd.DataFrame, left: pd.DataFrame, right: pd.DataFrame) -> float:
         total_entropy = self.calculate_entropy(data)
@@ -68,14 +67,28 @@ class ID3DecisionTree:
     def convert_numeric_to_categorical(self, data: pd.DataFrame) -> pd.DataFrame:
         for column in data.columns[:-1]:
             if pd.api.types.is_numeric_dtype(data[column]):
-                split_points = self.find_best_splits(data, column)
+                print(f"Processing numeric column: {column}")
+
+                unique_values = data[column].unique()
+                if len(unique_values) < 20:
+                    max_split = len(unique_values)
+                else:
+                    max_split = int(len(data) / 100)
+                min_val = data[column].min()
+                max_val = data[column].max()
+
+                split_points = self.find_best_splits(data, column, max_splits=max_split)
                 if split_points:
-                    bins = [-np.inf] + split_points + [np.inf]
+                    bins = [min_val] + split_points + [max_val]
+                    bins = sorted(set(bins))
                     labels = [f'<= {split_points[0]}'] + \
-                             [f'{split_points[i]} - {split_points[i + 1]}' for i in range(len(split_points) - 1)] + \
-                             [f'> {split_points[-1]}']
-                    data[column] = pd.cut(data[column], bins=bins, labels=labels)
+                            [f'{split_points[i]} - {split_points[i + 1]}' for i in range(len(split_points) - 1)] + \
+                            [f'> {split_points[-1]}']
+
+                    data[column] = pd.cut(data[column], bins=bins, labels=labels, include_lowest=True)
+
         return data
+
 
     def best_feature_to_split(self, data: pd.DataFrame) -> str:
         gains = {feature: self.calculate_information_gain(data, feature) for feature in data.columns[:-1]}
@@ -83,41 +96,164 @@ class ID3DecisionTree:
 
     def build_tree(self, data: pd.DataFrame) -> Dict[str, Any]:
         target = data.columns[-1]
+
         if len(data[target].unique()) == 1:
             return data[target].iloc[0]
+
         if len(data.columns) == 1:
             return data[target].mode().iloc[0]
 
         best_feature = self.best_feature_to_split(data)
+        print(f"Feature {best_feature} processed")
+
         tree = {best_feature: {}}
+
+        majority_class = data[target].mode().iloc[0]
 
         for value in data[best_feature].unique():
             subset = data[data[best_feature] == value].drop(columns=[best_feature])
             tree[best_feature][value] = self.build_tree(subset)
 
+        tree[best_feature]["unknown"] = majority_class
+
         return tree
 
-    def train_model(self, data: pd.DataFrame, label: str) -> Dict[str, Any]:
-        self.label = label  
+    def fit(self, X: pd.DataFrame, y: pd.Series) -> Dict[str, Any]:
+        self.label = 'attack_cat'
+
+        if isinstance(X, np.ndarray):
+            X = pd.DataFrame(X)
+            print(f"Converted X to pandas DataFrame. Type of X: {type(X)}; Shape of X: {X.shape}")
+
+        if len(X) != len(y):
+            raise ValueError("The number of rows in X and the number of elements in y must be the same.")
+
+        data = X.copy()
+        print(f"Target column 'attack_cat':\n{y.head()}")
+
+        try:
+            data[self.label] = y.values
+            print(f"Data after adding target column:\n{data.head()}")
+        except Exception as e:
+            print(f"Error occurred while adding target column: {e}")
+
         processed_data = self.convert_numeric_to_categorical(data)
+
+        print("Building tree")
+
+        columns = [col for col in processed_data.columns if col != self.label]
+        columns.append(self.label)
+
+        processed_data = processed_data[columns]
+        print(f"Columns after reordering: {processed_data.columns}")
+
         self.tree = self.build_tree(processed_data)
 
 
-    def predict_sample(self, tree: Dict[str, Any], sample: pd.Series) -> Any:
+    def predict_sample(self, tree: dict, sample: pd.Series) -> Any:
         while isinstance(tree, dict):
             feature = next(iter(tree))
-            tree = tree.get(feature, {}).get(sample[feature], None)
+            value = sample.get(feature)
+
+            if isinstance(value, pd.Series):
+                value = value.iloc[0]
+
+            if pd.isna(value):
+                return "default_class"
+
+            branches = tree[feature]
+
+            found_match = False
+            for key in branches:
+                if isinstance(key, str) and ' - ' in key:
+                    lower_bound, upper_bound = key.split(' - ')
+                    lower_bound = float(lower_bound)
+                    upper_bound = float(upper_bound)
+
+                    if isinstance(value, (int, float)):
+                        if lower_bound <= value <= upper_bound:
+                            tree = branches[key]
+                            found_match = True
+                            break
+                    else:
+                        continue
+
+                elif isinstance(key, str) and any(op in key for op in ['<=', '>=', '<', '>', '==', '!=']):
+                    operator, threshold = key.split(' ', 1)
+                    threshold = float(threshold) if operator not in ['==', '!='] else threshold
+
+                    if isinstance(value, (int, float)):
+                        if operator == '<=':
+                            if value <= threshold:
+                                tree = branches[key]
+                                found_match = True
+                                break
+                        elif operator == '<':
+                            if value < threshold:
+                                tree = branches[key]
+                                found_match = True
+                                break
+                        elif operator == '>=':
+                            if value >= threshold:
+                                tree = branches[key]
+                                found_match = True
+                                break
+                        elif operator == '>':
+                            if value > threshold:
+                                tree = branches[key]
+                                found_match = True
+                                break
+
+                        elif operator == '==':
+                            if value == threshold:
+                                tree = branches[key]
+                                found_match = True
+                                break
+                        elif operator == '!=':
+                            if value != threshold:
+                                tree = branches[key]
+                                found_match = True
+                                break
+                    else:
+                        continue
+
+                elif isinstance(value, (str, int, float)):
+                    if value == key:
+                        tree = branches[key]
+                        found_match = True
+                        break
+                else:
+
+                    continue
+
+            if not found_match:
+                if "unknown" in branches:
+                    # return "Normal"
+                    return branches["unknown"]
+                else:
+                    return "default_class"
+
         return tree
 
-    def predict(self, data: pd.DataFrame) -> pd.Series:
-        return pd.Series([self.predict_sample(self.tree, row) for _, row in data.iterrows()])
-    
+
+
+    def predict(self, df: pd.DataFrame) -> pd.Series:
+      # Ensure df is a pandas DataFrame
+      if isinstance(df, np.ndarray):
+          df = pd.DataFrame(df)
+          print(f"Converted df to pandas DataFrame. Type of df: {type(df)}; Shape of df: {df.shape}")
+
+      # Apply the prediction function row-wise
+      predictions = df.apply(lambda row: self.predict_sample(self.tree, row), axis=1)
+
+      return predictions
+
+
     def save_model(self, file_path: str) -> None:
-            if self.tree is None:
-                raise ValueError("Model is not trained yet, cannot save.")
-            
-            with open(file_path, 'w') as f:
-                json.dump(self.tree, f, indent=4)
+        if self.tree is None:
+            raise ValueError("Model is not trained yet, cannot save.")
+        with open(file_path, 'w') as f:
+            json.dump(self.tree, f, indent=4)
 
     def load_model(self, file_path: str) -> None:
         with open(file_path, 'r') as f:

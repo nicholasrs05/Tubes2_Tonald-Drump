@@ -1,113 +1,88 @@
 import pandas as pd
+from sklearn.base import BaseEstimator, ClassifierMixin
+from scipy.spatial.distance import cdist
+import numpy as np
 
-class KNN:
-    def __init__(self, data: pd.DataFrame) -> None:
-        self.data = data
-
-        print("Jumlah neighbour (k, integer)")
-        
-        while True:
-            try:
-                k_input = int(input(">>> "))
-                if k_input <= 0:
-                    raise ValueError
-                break
-            except ValueError:
-                print("Input tidak valid. Masukkan angka bulat positif.")
-
-        self.k = k_input
-
-        print("Metrik jarak:")
-        print("1. Euclidean")
-        print("2. Manhattan")
-        print("3. Minkowski")
-        print("Pilih metrik jarak (nama atau angka):")
-        
-        while True:
-            try:
-                distance_metric_input = input(">>> ")
-                distance_metric_input = distance_metric_input.lower()
-                
-                if distance_metric_input not in ["1", "2", "3", "euclidean", "manhattan", "minkowski"]:
-                    raise ValueError
-                break
-            except ValueError:
-                print("Input tidak valid. Pilih metrik jarak yang tersedia.")
-
-        self.distance_metric = distance_metric_input
+class KNN(BaseEstimator, ClassifierMixin):
+    def __init__(self) -> None:
+        """
+        attributes:
+            k (integer): banyaknya nearest-neighbour
+            distance_metric (enum: ['1', '2', '3', 'manhattan', 'euclidean', 'minkowski']): metode perhitungan distance
+            p (integer): nilai p untuk minkowski distance
+            data (DataFrame): data yang digunakan sebagai data train
+        """
+        self.k = 5
+        self.distance_metric = "3"
 
         if ((self.distance_metric == "minkowski") or (self.distance_metric == "3")):
-            print("Masukkan nilai p untuk metrik Minkowski:")
-            while True:
-                try:
-                    p_input = int(input(">>> "))
-                    if p_input <= 0:
-                        raise ValueError
-                    break
-                except ValueError:
-                    print("Input tidak valid. Masukkan angka bulat positif.")
-            
-            self.p = p_input
-        
-        ### end of method ###
-    
-    def calculateMinkowskiDistance(self, data1: pd.Series, data2: pd.Series, p: int):
-        distance = 0
-        weight = 1
+            self.p = 10
 
-        for i in range(len(data1)):
-            if (pd.api.types.is_numeric_dtype(data1.iloc[i])):
-                distance += abs(data1.iloc[i] - data2.iloc[i]) ** p
-            else:
-                if (data1.iloc[i] != data2.iloc[i]):
-                    distance += 1 * weight
-
-        return distance ** (1/p)
         ### end of method ###
 
-    def calculateEuclideanDistance(self, data1: pd.Series, data2: pd.Series):
-        return self.calculateMinkowskiDistance(data1, data2, 2)
+
+    def calculateManhattanDistance(self, test_data: np.ndarray, train_data: np.ndarray):
+        distance = cdist(test_data, train_data, metric='cityblock')
+
+        return distance
         ### end of method ###
-    
-    def calculateManhattanDistance(self, data1: pd.Series, data2: pd.Series):
-        return self.calculateMinkowskiDistance(data1, data2, 1)
+
+
+    def calculateEuclideanDistance(self, test_data: np.ndarray, train_data: np.ndarray):
+        distance = cdist(test_data, train_data, metric='euclidean')
+
+        return distance
         ### end of method ###
-    
-    def calculateDistance(self, data1: pd.Series, data2: pd.Series):
-        if ((self.distance_metric == "euclidean") or (self.distance_metric == "1")):
-            return self.calculateEuclideanDistance(data1, data2)
-        elif ((self.distance_metric == "manhattan") or (self.distance_metric == "2")):
-            return self.calculateManhattanDistance(data1, data2)
+
+
+    def calculateMinkowskiDistance(self, test_data: np.ndarray, train_data: np.ndarray):
+        distance = cdist(test_data, train_data, metric='minkowski', p=self.p)
+
+        return distance
+        ### end of method ###
+
+
+    def calculateDistance(self, test_data: np.ndarray, train_data: np.ndarray):
+        if ((self.distance_metric == "manhattan") or (self.distance_metric == "1")):
+            return self.calculateManhattanDistance(test_data, train_data)
+        elif ((self.distance_metric == "euclidean") or (self.distance_metric == "2")):
+            return self.calculateEuclideanDistance(test_data, train_data)
         elif ((self.distance_metric == "minkowski") or (self.distance_metric == "3")):
-            return self.calculateMinkowskiDistance(data1, data2, self.p)
+            return self.calculateMinkowskiDistance(test_data, train_data)
         ### end of method ###
+
+
+    def fit(self, X, y):
+        X = pd.DataFrame(X)
+        y = pd.DataFrame(y)
+        train_data = pd.concat([X, y], axis=1)
+        # sample_fraction = min(1, 10000 / len(train_data))
+        # train_data = train_data.groupby('attack_cat', group_keys=False).apply(lambda x: x.sample(frac=sample_fraction)).reset_index(drop=True)
+        self.data = train_data
+
+        ### end of method ###
+
 
     def predict(self, data_to_predict: pd.DataFrame):
         class_predictions = []
+        features = self.data.columns.difference(["attack_cat"])
+        train_data = self.data[features].values
+        train_labels = self.data['attack_cat'].values
+        test_data = data_to_predict[features].values
 
-        for index_predict, row_predict in data_to_predict.iterrows():
-            # distance format: [[data_index, distance, class], ...]
-            distances = []
-            for index, row in self.data.iterrows():
-                distance = self.calculateDistance(row_predict, row)
-                distances.append([index + 1, distance, row['play']])
-            
-            distances = sorted(distances, key=lambda x: x[1])
+        distances = self.calculateDistance(test_data, train_data)
 
-            k_nearest_neighbours = distances[:self.k]
-            print(k_nearest_neighbours)
+        for i in range(len(test_data)):
+            k_nearest_indices = distances[i].argsort()[:self.k]
+            k_nearest_labels = train_labels[k_nearest_indices]
+            unique, counts = np.unique(k_nearest_labels, return_counts=True)
+            class_predictions.append(unique[np.argmax(counts)])
 
-            class_frequency = {}
-            for neighbour in k_nearest_neighbours:
-                if (neighbour[1] in class_frequency):
-                    class_frequency[neighbour[2]] += 1
-                else:
-                    class_frequency[neighbour[2]] = 1
-            
-            class_predictions.append(max(class_frequency, key=class_frequency.get))
-        
         return class_predictions
         ### end of method ###
+
+# classifier = KNN()
+# pipe = run_pipeline(classifier=classifier)
 
 
 ### Unit Test ###
@@ -128,6 +103,91 @@ class KNN:
 #     'windy': [True, False, True, False, True, False]
 # })
 
-# kNN_model = KNN(data)
-# predictions = kNN_model.predict(data_to_predict)
-# print(predictions)
+# print(data.isnull().sum())
+
+
+
+
+
+# train_data = pd.read_csv("data/preprocessed_train_data.csv")
+# val_data = pd.read_csv("data/preprocessed_validation_data.csv")
+# test_data = pd.read_csv("data/preprocessed_test_data.csv")
+
+# # exclude id column
+# train_data = train_data.drop(columns=["id"])
+# val_data = val_data.drop(columns=["id"])
+# test_data = test_data.drop(columns=["id"])
+
+# print("train_data length: ", len(train_data))
+# print("val_data length: ", len(val_data))
+# print("test data length: ", len(test_data))
+
+# # take 10000 training data with distributed attack_cat
+# sample_fraction = min(1, 1000 / len(train_data))
+# train_data = train_data.groupby('attack_cat', group_keys=False).apply(lambda x: x.sample(frac=sample_fraction)).reset_index(drop=True)
+# # take 5 samples from val_data
+# # sample = val_data.head(200)
+
+# # start timer
+# import time
+# start_time = time.time()
+
+
+
+
+### USING KNN CLASS ###
+
+# knn = KNN(test_data)
+# prediction = knn.predict(sample)
+
+# # calculate accuracy
+# accuracy = (prediction == sample['attack_cat']).mean()
+# print(f"Accuracy: {accuracy}")
+
+
+
+
+
+### USING SCIKIT-LEARN ###
+
+# # use scikit knn to predict
+# from sklearn.neighbors import KNeighborsClassifier
+# knn_scikit = KNeighborsClassifier(n_neighbors=5)
+
+# # Prepare the data for scikit-learn
+# X_train = train_data.drop(columns=["attack_cat"])
+# y_train = train_data["attack_cat"]
+# # X_val = sample.drop(columns=["attack_cat"])
+
+# # Fit the scikit-learn KNN model
+# knn_scikit.fit(X_train, y_train)
+
+# # Predict using the scikit-learn KNN model
+# # scikit_prediction = knn_scikit.predict(X_val)
+# scikit_prediction = knn_scikit.predict(test_data)
+
+# # print accuracy
+# # accuracy = (scikit_prediction == sample['attack_cat']).mean()
+# # print(f"Accuracy: {accuracy}")
+
+
+
+
+# # end timer
+# print("--- %s seconds ---" % (time.time() - start_time))
+
+
+
+# # export the prediction to csv with only id and attack_cat
+# # ex:
+# # id, attack_cat
+# # 0, Normal
+# # 1, Exploits
+
+# result = pd.DataFrame({
+#     "id": test_data.index,
+#     # "attack_cat": prediction
+#     "attack_cat": scikit_prediction
+# })
+
+# result.to_csv("data/knn_lib_test_prediction.csv", index=False)
